@@ -1,0 +1,443 @@
+import React, { useState } from 'react';
+import { Settings, Image, Loader2, Upload, X, Sparkles } from 'lucide-react';
+
+function App() {
+  // State for API settings
+  const [apiKey, setApiKey] = useState('');
+  const [endpoint, setEndpoint] = useState('');
+  const [model, setModel] = useState('gemini-3-pro-image-preview');
+  
+  // State for generation parameters
+  const [aspectRatio, setAspectRatio] = useState('1:1');
+  const [resolution, setResolution] = useState('1K');
+  const [prompt, setPrompt] = useState('');
+  const [referenceImage, setReferenceImage] = useState(null);
+  const [referenceImagePreview, setReferenceImagePreview] = useState(null);
+  
+  // State for generation
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [generatedImages, setGeneratedImages] = useState([]);
+  const [error, setError] = useState(null);
+
+  // Handle reference image upload
+  const handleImageUpload = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      setReferenceImage(file);
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setReferenceImagePreview(reader.result);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  // Remove reference image
+  const removeReferenceImage = () => {
+    setReferenceImage(null);
+    setReferenceImagePreview(null);
+  };
+
+  // Convert file to base64
+  const fileToBase64 = (file) => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = () => {
+        // Remove the data:image/xxx;base64, prefix
+        const base64 = reader.result.split(',')[1];
+        resolve(base64);
+      };
+      reader.onerror = error => reject(error);
+    });
+  };
+
+  // Generate image
+  const handleGenerate = async () => {
+    if (!apiKey) {
+      setError('请输入 API Key');
+      return;
+    }
+    if (!prompt) {
+      setError('请输入提示词');
+      return;
+    }
+
+    setIsGenerating(true);
+    setError(null);
+
+    try {
+      // Map resolution to imageSize parameter (1K, 2K, 4K)
+      const resolutionMap = {
+        '1K': '1K',
+        '2K': '2K',
+        '4K': '4K'
+      };
+
+      // Prepare imageConfig based on official API docs
+      const imageConfig = {
+        aspectRatio: aspectRatio  // Use camelCase as per official docs
+      };
+
+      // Only add imageSize for Pro model (Flash uses fixed 1024px)
+      if (model === 'gemini-3-pro-image-preview') {
+        imageConfig.imageSize = resolutionMap[resolution];
+      }
+
+      // Prepare the request body according to official API docs
+      const requestBody = {
+        contents: [{
+          parts: []
+        }],
+        generationConfig: {
+          responseModalities: ["image"],
+          imageConfig: imageConfig
+        }
+      };
+
+      // Add text prompt
+      requestBody.contents[0].parts.push({
+        text: prompt
+      });
+
+      // Add reference image if available
+      if (referenceImage) {
+        const base64Image = await fileToBase64(referenceImage);
+        requestBody.contents[0].parts.push({
+          inlineData: {
+            mimeType: referenceImage.type,
+            data: base64Image
+          }
+        });
+      }
+
+      // Build API URL
+      let apiUrl;
+      if (!endpoint || endpoint.trim() === '') {
+        // Use default Google API endpoint
+        apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+      } else {
+        // Use custom endpoint base URL and append model path
+        // Remove trailing slash if present
+        const baseUrl = endpoint.trim().replace(/\/+$/, '');
+        apiUrl = `${baseUrl}/v1beta/models/${model}:generateContent?key=${apiKey}`;
+      }
+
+      // Make API call
+      const response = await fetch(
+        apiUrl,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(requestBody)
+        }
+      );
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error?.message || '生成失败');
+      }
+
+      const data = await response.json();
+      
+      // Extract image from response
+      if (data.candidates && data.candidates[0]?.content?.parts) {
+        const imageParts = data.candidates[0].content.parts.filter(
+          part => part.inlineData && part.inlineData.mimeType.startsWith('image/')
+        );
+        
+        if (imageParts.length > 0) {
+          const newImages = imageParts.map(part => ({
+            id: Date.now() + Math.random(),
+            data: `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`,
+            prompt: prompt,
+            timestamp: new Date().toLocaleString('zh-CN')
+          }));
+          setGeneratedImages([...newImages, ...generatedImages]);
+        } else {
+          throw new Error('响应中没有找到图片数据');
+        }
+      } else {
+        throw new Error('API 响应格式不正确');
+      }
+    } catch (err) {
+      console.error('Generation error:', err);
+      setError(err.message || '生成图片时出错');
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  // Download image
+  const downloadImage = (imageData, index) => {
+    const link = document.createElement('a');
+    link.href = imageData;
+    link.download = `nanogen-${Date.now()}-${index}.jpg`;
+    link.click();
+  };
+
+  return (
+    <div className="flex h-screen bg-gradient-to-br from-slate-50 to-slate-100">
+      {/* Sidebar */}
+      <div className="w-80 bg-white shadow-xl border-r border-slate-200 flex flex-col">
+        <div className="p-6 border-b border-slate-200">
+          <div className="flex items-center gap-3 mb-2">
+            <div className="p-2 bg-gradient-to-br from-primary-500 to-primary-600 rounded-lg">
+              <Sparkles className="w-6 h-6 text-white" />
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold text-slate-800">NanoGen</h1>
+              <p className="text-xs text-slate-500">AI Image Studio</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-6 space-y-6">
+          {/* API Settings */}
+          <div className="space-y-4">
+            <div className="flex items-center gap-2 text-slate-700 font-semibold">
+              <Settings className="w-4 h-4" />
+              <h2 className="text-sm uppercase tracking-wide">API 设置</h2>
+            </div>
+            
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-2">
+                API Key *
+              </label>
+              <input
+                type="password"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                placeholder="输入你的 Gemini API Key"
+                className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent text-sm"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-2">
+                Endpoint (可选)
+              </label>
+              <input
+                type="text"
+                value={endpoint}
+                onChange={(e) => setEndpoint(e.target.value)}
+                placeholder="例如: https://api.drqyq.com (留空使用 Google 官方 API)"
+                className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent text-sm"
+              />
+              <p className="text-xs text-slate-500 mt-1">
+                {endpoint 
+                  ? `自定义: ${endpoint.trim().replace(/\/+$/, '')}/v1beta/models/${model}:generateContent` 
+                  : '默认使用 Google 官方 API'}
+              </p>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-2">
+                模型
+              </label>
+              <select
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent text-sm bg-white"
+              >
+                <option value="gemini-3-pro-image-preview">Gemini 3 Pro Image Preview (高质量)</option>
+                <option value="gemini-2.5-flash-image">Gemini 2.5 Flash Image (快速)</option>
+              </select>
+              <p className="text-xs text-slate-500 mt-1">
+                {model === 'gemini-2.5-flash-image' 
+                  ? '快速生成，固定 1024px 分辨率' 
+                  : '高质量生成，支持 1K/2K/4K 分辨率'}
+              </p>
+            </div>
+          </div>
+
+          {/* Generation Parameters */}
+          <div className="space-y-4 pt-4 border-t border-slate-200">
+            <div className="flex items-center gap-2 text-slate-700 font-semibold">
+              <Image className="w-4 h-4" />
+              <h2 className="text-sm uppercase tracking-wide">生成参数</h2>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-2">
+                纵横比
+              </label>
+              <select
+                value={aspectRatio}
+                onChange={(e) => setAspectRatio(e.target.value)}
+                className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent text-sm bg-white"
+              >
+                <option value="1:1">1:1 (正方形)</option>
+                <option value="16:9">16:9 (横向)</option>
+                <option value="9:16">9:16 (竖向)</option>
+                <option value="4:3">4:3 (标准)</option>
+                <option value="3:4">3:4 (竖版标准)</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-2">
+                分辨率
+                {model === 'gemini-2.5-flash-image' && (
+                  <span className="ml-2 text-xs text-slate-500">(Flash 模型固定 1024px)</span>
+                )}
+              </label>
+              <div className="grid grid-cols-3 gap-2">
+                {['1K', '2K', '4K'].map((res) => (
+                  <button
+                    key={res}
+                    onClick={() => setResolution(res)}
+                    disabled={model === 'gemini-2.5-flash-image'}
+                    className={`px-3 py-2 rounded-lg text-sm font-medium transition-all ${
+                      resolution === res
+                        ? 'bg-primary-500 text-white shadow-md'
+                        : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                    } ${model === 'gemini-2.5-flash-image' ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  >
+                    {res}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Main Content */}
+      <div className="flex-1 flex flex-col">
+        {/* Input Area */}
+        <div className="bg-white border-b border-slate-200 p-6 shadow-sm">
+          <div className="max-w-4xl mx-auto space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-2">
+                提示词
+              </label>
+              <textarea
+                value={prompt}
+                onChange={(e) => setPrompt(e.target.value)}
+                placeholder="描述你想要生成的图片..."
+                rows={4}
+                className="w-full px-4 py-3 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent resize-none text-sm"
+              />
+            </div>
+
+            <div className="flex items-center gap-4">
+              {/* Reference Image Upload */}
+              <div className="flex-1">
+                {referenceImagePreview ? (
+                  <div className="relative inline-block">
+                    <img
+                      src={referenceImagePreview}
+                      alt="Reference"
+                      className="h-24 w-24 object-cover rounded-lg border-2 border-slate-300"
+                    />
+                    <button
+                      onClick={removeReferenceImage}
+                      className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-1 hover:bg-red-600 transition-colors"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                ) : (
+                  <label className="inline-flex items-center gap-2 px-4 py-2 border-2 border-dashed border-slate-300 rounded-lg hover:border-primary-400 hover:bg-primary-50 transition-colors cursor-pointer">
+                    <Upload className="w-4 h-4 text-slate-600" />
+                    <span className="text-sm text-slate-600">上传参考图片</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={handleImageUpload}
+                      className="hidden"
+                    />
+                  </label>
+                )}
+              </div>
+
+              {/* Generate Button */}
+              <button
+                onClick={handleGenerate}
+                disabled={isGenerating || !apiKey || !prompt}
+                className="px-8 py-3 bg-gradient-to-r from-primary-500 to-primary-600 text-white rounded-lg font-medium hover:from-primary-600 hover:to-primary-700 disabled:from-slate-300 disabled:to-slate-400 disabled:cursor-not-allowed transition-all shadow-lg hover:shadow-xl flex items-center gap-2"
+              >
+                {isGenerating ? (
+                  <>
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                    生成中...
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-5 h-5" />
+                    生成图片
+                  </>
+                )}
+              </button>
+            </div>
+
+            {/* Error Message */}
+            {error && (
+              <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">
+                {error}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Generated Images Grid */}
+        <div className="flex-1 overflow-y-auto p-6 bg-gradient-to-br from-slate-50 to-slate-100">
+          <div className="max-w-6xl mx-auto">
+            {generatedImages.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-full text-center py-20">
+                <div className="p-6 bg-white rounded-full shadow-lg mb-6">
+                  <Image className="w-16 h-16 text-slate-300" />
+                </div>
+                <h3 className="text-xl font-semibold text-slate-700 mb-2">
+                  还没有生成的图片
+                </h3>
+                <p className="text-slate-500 max-w-md">
+                  输入提示词并点击"生成图片"按钮开始创作你的第一张 AI 图片
+                </p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {generatedImages.map((image, index) => (
+                  <div
+                    key={image.id}
+                    className="bg-white rounded-xl shadow-lg overflow-hidden hover:shadow-2xl transition-shadow fade-in group"
+                  >
+                    <div className="relative aspect-square">
+                      <img
+                        src={image.data}
+                        alt={image.prompt}
+                        className="w-full h-full object-cover"
+                      />
+                      <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-40 transition-all flex items-center justify-center">
+                        <button
+                          onClick={() => downloadImage(image.data, index)}
+                          className="opacity-0 group-hover:opacity-100 px-4 py-2 bg-white text-slate-700 rounded-lg font-medium hover:bg-slate-100 transition-all transform scale-90 group-hover:scale-100"
+                        >
+                          下载图片
+                        </button>
+                      </div>
+                    </div>
+                    <div className="p-4">
+                      <p className="text-sm text-slate-600 line-clamp-2 mb-2">
+                        {image.prompt}
+                      </p>
+                      <p className="text-xs text-slate-400">
+                        {image.timestamp}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default App;
+
