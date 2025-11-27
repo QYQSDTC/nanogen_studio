@@ -22,6 +22,19 @@ body {
   overflow: hidden;
 }
 
+/* Mobile optimizations */
+@media (max-width: 640px) {
+  html {
+    font-size: 14px;
+  }
+}
+
+/* Prevent horizontal scroll on mobile */
+body {
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+}
+
 /* Custom scrollbar */
 ::-webkit-scrollbar {
   width: 8px;
@@ -66,5 +79,24 @@ body {
 
 .fade-in {
   animation: fadeIn 0.3s ease-out;
+}
+
+/* Touch-friendly button sizing */
+@media (max-width: 640px) {
+  button, input, textarea, select {
+    font-size: 16px; /* Prevent zoom on iOS */
+  }
+  
+  /* Larger touch targets */
+  button {
+    min-height: 44px;
+  }
+}
+
+/* Smooth transitions for sidebar */
+.transform {
+  transition-property: transform;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  transition-duration: 300ms;
 }
 
