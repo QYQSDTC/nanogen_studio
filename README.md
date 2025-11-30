@@ -1,4 +1,4 @@
-# NanoGen Studio 🍌
+# NanoGen Studio 🍌 (此 App 完全由 Cursor 生成)
 
 一个轻量级的 AI 图像生成工具，基于 Google Gemini 图像生成模型（Nano Banana）。
 
