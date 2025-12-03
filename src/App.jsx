@@ -24,6 +24,7 @@ function App() {
   const [prompt, setPrompt] = useState("");
   const [referenceImages, setReferenceImages] = useState([]);
   const [referenceImagePreviews, setReferenceImagePreviews] = useState([]);
+  const [enableSearch, setEnableSearch] = useState(false);
 
   // State for generation
   const [isGenerating, setIsGenerating] = useState(false);
@@ -142,6 +143,15 @@ function App() {
           imageConfig: imageConfig,
         },
       };
+
+      // Add Google Search grounding if enabled (only for Pro model)
+      if (enableSearch && model === "gemini-3-pro-image-preview") {
+        requestBody.tools = [
+          {
+            googleSearch: {},
+          },
+        ];
+      }
 
       // Add text prompt
       requestBody.contents[0].parts.push({
@@ -346,6 +356,32 @@ function App() {
                   : "高质量生成，支持 1K/2K/4K 分辨率，支持最多 14 张参考图"}
               </p>
             </div>
+
+            {/* Google Search Toggle - Only for Pro model */}
+            {model === "gemini-3-pro-image-preview" && (
+              <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-200">
+                <div className="flex-1">
+                  <label className="block text-sm font-medium text-slate-700">
+                    启用 Google 搜索
+                  </label>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    实时检索最新信息辅助生成
+                  </p>
+                </div>
+                <button
+                  onClick={() => setEnableSearch(!enableSearch)}
+                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                    enableSearch ? "bg-primary-500" : "bg-slate-300"
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform shadow-sm ${
+                      enableSearch ? "translate-x-6" : "translate-x-1"
+                    }`}
+                  />
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Generation Parameters */}
