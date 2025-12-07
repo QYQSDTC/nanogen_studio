@@ -25,6 +25,7 @@ function App() {
   const [referenceImages, setReferenceImages] = useState([]);
   const [referenceImagePreviews, setReferenceImagePreviews] = useState([]);
   const [enableSearch, setEnableSearch] = useState(false);
+  const [enableMultiImage, setEnableMultiImage] = useState(false); // 豆包组图功能
 
   // State for generation
   const [isGenerating, setIsGenerating] = useState(false);
@@ -37,18 +38,29 @@ function App() {
     if (referenceImages.length > maxImages) {
       setReferenceImages((prev) => prev.slice(0, maxImages));
       setReferenceImagePreviews((prev) => prev.slice(0, maxImages));
-      setError(
-        `切换到 ${
-          model === "gemini-2.5-flash-image" ? "Flash" : "Pro"
-        } 模型，参考图片已限制为 ${maxImages} 张`
-      );
+      const modelName =
+        model === "gemini-2.5-flash-image"
+          ? "Flash"
+          : model === "doubao-seedream-4-5-251128"
+          ? "豆包 4.5"
+          : "Pro";
+      setError(`切换到 ${modelName} 模型，参考图片已限制为 ${maxImages} 张`);
       setTimeout(() => setError(null), 3000);
+    }
+    // Set default resolution for Doubao model (2K)
+    if (model === "doubao-seedream-4-5-251128") {
+      setResolution("2K");
     }
   }, [model]);
 
+  // Check if model is doubao
+  const isDoubaoModel = model === "doubao-seedream-4-5-251128";
+
   // Get max images allowed based on model
   const getMaxImages = () => {
-    return model === "gemini-3-pro-image-preview" ? 14 : 1;
+    if (model === "gemini-3-pro-image-preview") return 14;
+    if (isDoubaoModel) return 5; // 豆包支持多图融合，最多5张参考图
+    return 1;
   };
 
   // Handle reference image upload
@@ -109,116 +121,20 @@ function App() {
       setError("请输入提示词");
       return;
     }
+    if (isDoubaoModel && (!endpoint || endpoint.trim() === "")) {
+      setError("豆包模型需要填写阿 Q API Endpoint");
+      return;
+    }
 
     setIsGenerating(true);
     setError(null);
 
     try {
-      // Map resolution to imageSize parameter (1K, 2K, 4K)
-      const resolutionMap = {
-        "1K": "1K",
-        "2K": "2K",
-        "4K": "4K",
-      };
-
-      // Prepare imageConfig based on official API docs
-      const imageConfig = {
-        aspectRatio: aspectRatio, // Use camelCase as per official docs
-      };
-
-      // Only add imageSize for Pro model (Flash uses fixed 1024px)
-      if (model === "gemini-3-pro-image-preview") {
-        imageConfig.imageSize = resolutionMap[resolution];
-      }
-
-      // Prepare the request body according to official API docs
-      const requestBody = {
-        contents: [
-          {
-            parts: [],
-          },
-        ],
-        generationConfig: {
-          responseModalities: ["image"],
-          imageConfig: imageConfig,
-        },
-      };
-
-      // Add Google Search grounding if enabled (only for Pro model)
-      if (enableSearch && model === "gemini-3-pro-image-preview") {
-        requestBody.tools = [
-          {
-            googleSearch: {},
-          },
-        ];
-      }
-
-      // Add text prompt
-      requestBody.contents[0].parts.push({
-        text: prompt,
-      });
-
-      // Add reference image if available
-      if (referenceImages.length > 0) {
-        for (const image of referenceImages) {
-          const base64Image = await fileToBase64(image);
-          requestBody.contents[0].parts.push({
-            inlineData: {
-              mimeType: image.type,
-              data: base64Image,
-            },
-          });
-        }
-      }
-
-      // Build API URL
-      let apiUrl;
-      if (!endpoint || endpoint.trim() === "") {
-        // Use default Google API endpoint
-        apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+      // Handle Doubao model with OpenAI-compatible API
+      if (isDoubaoModel) {
+        await handleDoubaoGenerate();
       } else {
-        // Use custom endpoint base URL and append model path
-        // Remove trailing slash if present
-        const baseUrl = endpoint.trim().replace(/\/+$/, "");
-        apiUrl = `${baseUrl}/v1beta/models/${model}:generateContent?key=${apiKey}`;
-      }
-
-      // Make API call
-      const response = await fetch(apiUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(requestBody),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error?.message || "生成失败");
-      }
-
-      const data = await response.json();
-
-      // Extract image from response
-      if (data.candidates && data.candidates[0]?.content?.parts) {
-        const imageParts = data.candidates[0].content.parts.filter(
-          (part) =>
-            part.inlineData && part.inlineData.mimeType.startsWith("image/")
-        );
-
-        if (imageParts.length > 0) {
-          const newImages = imageParts.map((part) => ({
-            id: Date.now() + Math.random(),
-            data: `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`,
-            prompt: prompt,
-            timestamp: new Date().toLocaleString("zh-CN"),
-          }));
-          setGeneratedImages([...newImages, ...generatedImages]);
-        } else {
-          throw new Error("响应中没有找到图片数据");
-        }
-      } else {
-        throw new Error("API 响应格式不正确");
+        await handleGeminiGenerate();
       }
     } catch (err) {
       console.error("Generation error:", err);
@@ -228,12 +144,200 @@ function App() {
     }
   };
 
+  // Handle Doubao model generation (OpenAI-compatible API)
+  const handleDoubaoGenerate = async () => {
+    const baseUrl = endpoint.trim().replace(/\/+$/, "");
+    const apiUrl = `${baseUrl}/v1/images/generations`;
+
+    // Build request body for Doubao
+    const requestBody = {
+      model: model,
+      prompt: prompt,
+      size: resolution || "2K",
+      // Use url format (default) - returns download link valid for 24 hours
+      // b64_json returns base64 encoded image data
+      response_format: "url",
+      // sequential_image_generation: auto enables multi-image generation
+      // Model will auto-determine whether to return multiple images based on prompt
+      sequential_image_generation: enableMultiImage ? "auto" : "disabled",
+    };
+
+    // Add reference images if available
+    if (referenceImages.length > 0) {
+      const imageUrls = [];
+      for (const image of referenceImages) {
+        const base64Image = await fileToBase64(image);
+        imageUrls.push(`data:${image.type};base64,${base64Image}`);
+      }
+      requestBody.image = imageUrls.length === 1 ? imageUrls[0] : imageUrls;
+    }
+
+    const response = await fetch(apiUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(requestBody),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error?.message || "生成失败");
+    }
+
+    const data = await response.json();
+    console.log("Doubao API response:", data);
+
+    // Extract images from OpenAI-compatible response
+    if (data.data && data.data.length > 0) {
+      const newImages = data.data.map((item) => ({
+        id: Date.now() + Math.random(),
+        // Handle both url and b64_json formats (image is jpeg format)
+        data: item.b64_json
+          ? `data:image/jpeg;base64,${item.b64_json}`
+          : item.url,
+        prompt: prompt,
+        timestamp: new Date().toLocaleString("zh-CN"),
+      }));
+      setGeneratedImages([...newImages, ...generatedImages]);
+    } else {
+      throw new Error("响应中没有找到图片数据");
+    }
+  };
+
+  // Handle Gemini model generation
+  const handleGeminiGenerate = async () => {
+    // Map resolution to imageSize parameter (1K, 2K, 4K)
+    const resolutionMap = {
+      "1K": "1K",
+      "2K": "2K",
+      "4K": "4K",
+    };
+
+    // Prepare imageConfig based on official API docs
+    const imageConfig = {
+      aspectRatio: aspectRatio,
+    };
+
+    // Add imageSize for Pro model (Flash uses fixed 1024px)
+    if (model === "gemini-3-pro-image-preview") {
+      imageConfig.imageSize = resolutionMap[resolution];
+    }
+
+    // Prepare the request body according to official API docs
+    const requestBody = {
+      contents: [
+        {
+          parts: [],
+        },
+      ],
+      generationConfig: {
+        responseModalities: ["image"],
+        imageConfig: imageConfig,
+      },
+    };
+
+    // Add Google Search grounding if enabled (only for Pro model)
+    if (enableSearch && model === "gemini-3-pro-image-preview") {
+      requestBody.tools = [
+        {
+          googleSearch: {},
+        },
+      ];
+    }
+
+    // Add text prompt
+    requestBody.contents[0].parts.push({
+      text: prompt,
+    });
+
+    // Add reference image if available
+    if (referenceImages.length > 0) {
+      for (const image of referenceImages) {
+        const base64Image = await fileToBase64(image);
+        requestBody.contents[0].parts.push({
+          inlineData: {
+            mimeType: image.type,
+            data: base64Image,
+          },
+        });
+      }
+    }
+
+    // Build API URL
+    let apiUrl;
+    if (!endpoint || endpoint.trim() === "") {
+      apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+    } else {
+      const baseUrl = endpoint.trim().replace(/\/+$/, "");
+      apiUrl = `${baseUrl}/v1beta/models/${model}:generateContent?key=${apiKey}`;
+    }
+
+    const response = await fetch(apiUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(requestBody),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error?.message || "生成失败");
+    }
+
+    const data = await response.json();
+
+    // Extract image from response
+    if (data.candidates && data.candidates[0]?.content?.parts) {
+      const imageParts = data.candidates[0].content.parts.filter(
+        (part) =>
+          part.inlineData && part.inlineData.mimeType.startsWith("image/")
+      );
+
+      if (imageParts.length > 0) {
+        const newImages = imageParts.map((part) => ({
+          id: Date.now() + Math.random(),
+          data: `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`,
+          prompt: prompt,
+          timestamp: new Date().toLocaleString("zh-CN"),
+        }));
+        setGeneratedImages([...newImages, ...generatedImages]);
+      } else {
+        throw new Error("响应中没有找到图片数据");
+      }
+    } else {
+      throw new Error("API 响应格式不正确");
+    }
+  };
+
   // Download image
-  const downloadImage = (imageData, index) => {
-    const link = document.createElement("a");
-    link.href = imageData;
-    link.download = `nanogen-${Date.now()}-${index}.jpg`;
-    link.click();
+  const downloadImage = async (imageData, index) => {
+    try {
+      // Check if it's a URL (not base64)
+      if (imageData.startsWith("http")) {
+        // Fetch the image and convert to blob for download
+        const response = await fetch(imageData);
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `nanogen-${Date.now()}-${index}.jpg`;
+        link.click();
+        window.URL.revokeObjectURL(url);
+      } else {
+        // Base64 data - direct download
+        const link = document.createElement("a");
+        link.href = imageData;
+        link.download = `nanogen-${Date.now()}-${index}.jpg`;
+        link.click();
+      }
+    } catch (err) {
+      console.error("Download error:", err);
+      // Fallback: open in new tab
+      window.open(imageData, "_blank");
+    }
   };
 
   return (
@@ -306,24 +410,42 @@ function App() {
                 type="password"
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
-                placeholder="输入你的 Gemini API Key"
+                placeholder={
+                  isDoubaoModel
+                    ? "输入你的阿 Q API Key"
+                    : "输入你的 Gemini API Key"
+                }
                 className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent text-sm"
               />
             </div>
 
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-2">
-                Endpoint (可选)
+                Endpoint {isDoubaoModel ? "(必填)" : "(可选)"}
               </label>
               <input
                 type="text"
                 value={endpoint}
                 onChange={(e) => setEndpoint(e.target.value)}
-                placeholder="例如: https://api.drqyq.com (留空使用 Google 官方 API)"
-                className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent text-sm"
+                placeholder={
+                  isDoubaoModel
+                    ? "豆包模型必须填写阿 Q API Endpoint"
+                    : "例如: https://api.drqyq.com (留空使用 Google 官方 API)"
+                }
+                className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent text-sm ${
+                  isDoubaoModel && !endpoint
+                    ? "border-amber-400 bg-amber-50"
+                    : "border-slate-300"
+                }`}
               />
               <p className="text-xs text-slate-500 mt-1">
-                {endpoint
+                {isDoubaoModel
+                  ? endpoint
+                    ? `阿 Q API: ${endpoint
+                        .trim()
+                        .replace(/\/+$/, "")}/v1/images/generations`
+                    : "⚠️ 豆包模型需要使用阿 Q API，请填写 Endpoint"
+                  : endpoint
                   ? `自定义: ${endpoint
                       .trim()
                       .replace(
@@ -349,10 +471,15 @@ function App() {
                 <option value="gemini-2.5-flash-image">
                   Gemini 2.5 Flash Image (快速，最多1张参考图)
                 </option>
+                <option value="doubao-seedream-4-5-251128">
+                  豆包 4.5 (需要阿 Q API，最多5张参考图)
+                </option>
               </select>
               <p className="text-xs text-slate-500 mt-1">
                 {model === "gemini-2.5-flash-image"
                   ? "快速生成，固定 1024px 分辨率，支持 1 张参考图"
+                  : model === "doubao-seedream-4-5-251128"
+                  ? "字节跳动豆包图像生成模型，需要使用阿 Q API Endpoint"
                   : "高质量生成，支持 1K/2K/4K 分辨率，支持最多 14 张参考图"}
               </p>
             </div>
@@ -377,6 +504,32 @@ function App() {
                   <span
                     className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform shadow-sm ${
                       enableSearch ? "translate-x-6" : "translate-x-1"
+                    }`}
+                  />
+                </button>
+              </div>
+            )}
+
+            {/* Multi-Image Toggle - Only for Doubao model */}
+            {isDoubaoModel && (
+              <div className="flex items-center justify-between p-3 bg-amber-50 rounded-lg border border-amber-200">
+                <div className="flex-1">
+                  <label className="block text-sm font-medium text-slate-700">
+                    启用组图生成
+                  </label>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    模型自动判断生成多张相关图片
+                  </p>
+                </div>
+                <button
+                  onClick={() => setEnableMultiImage(!enableMultiImage)}
+                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                    enableMultiImage ? "bg-amber-500" : "bg-slate-300"
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform shadow-sm ${
+                      enableMultiImage ? "translate-x-6" : "translate-x-1"
                     }`}
                   />
                 </button>
@@ -415,6 +568,9 @@ function App() {
                   <span className="ml-2 text-xs text-slate-500">
                     (Flash 模型固定 1024px)
                   </span>
+                )}
+                {isDoubaoModel && (
+                  <span className="ml-2 text-xs text-slate-500">(默认 2K)</span>
                 )}
               </label>
               <div className="grid grid-cols-3 gap-2">
@@ -486,7 +642,7 @@ function App() {
                         <input
                           type="file"
                           accept="image/*"
-                          multiple={model === "gemini-3-pro-image-preview"}
+                          multiple={getMaxImages() > 1}
                           onChange={handleImageUpload}
                           className="hidden"
                         />
@@ -502,7 +658,7 @@ function App() {
                     <input
                       type="file"
                       accept="image/*"
-                      multiple={model === "gemini-3-pro-image-preview"}
+                      multiple={getMaxImages() > 1}
                       onChange={handleImageUpload}
                       className="hidden"
                     />
