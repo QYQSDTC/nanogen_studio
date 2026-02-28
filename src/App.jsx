@@ -40,7 +40,9 @@ function App() {
       setReferenceImagePreviews((prev) => prev.slice(0, maxImages));
       const modelName =
         model === "gemini-2.5-flash-image"
-          ? "Flash"
+          ? "Flash 2.5"
+          : model === "gemini-3.1-flash-image-preview"
+          ? "Flash 3.1"
           : model === "doubao-seedream-4-5-251128"
           ? "豆包 4.5"
           : "Pro";
@@ -55,11 +57,13 @@ function App() {
 
   // Check if model is doubao
   const isDoubaoModel = model === "doubao-seedream-4-5-251128";
+  const isGeminiModel = model.startsWith("gemini-");
 
   // Get max images allowed based on model
   const getMaxImages = () => {
     if (model === "gemini-3-pro-image-preview") return 14;
-    if (isDoubaoModel) return 5; // 豆包支持多图融合，最多5张参考图
+    if (model === "gemini-3.1-flash-image-preview") return 1;
+    if (isDoubaoModel) return 5;
     return 1;
   };
 
@@ -172,21 +176,54 @@ function App() {
       requestBody.image = imageUrls.length === 1 ? imageUrls[0] : imageUrls;
     }
 
-    const response = await fetch(apiUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify(requestBody),
-    });
+    // Set up timeout with AbortController (120s for Doubao)
+    const timeoutMs = 120000;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.error?.message || "生成失败");
+    let response;
+    try {
+      response = await fetch(apiUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify(requestBody),
+        signal: controller.signal,
+      });
+    } catch (err) {
+      clearTimeout(timeoutId);
+      if (err.name === "AbortError") {
+        throw new Error(`请求超时（${timeoutMs / 1000}秒），请稍后重试`);
+      }
+      throw err;
+    } finally {
+      clearTimeout(timeoutId);
     }
 
-    const data = await response.json();
+    if (!response.ok) {
+      let errorMessage = `HTTP ${response.status}`;
+      try {
+        const errorData = await response.json();
+        errorMessage = errorData.error?.message || JSON.stringify(errorData);
+      } catch {
+        try {
+          const errorText = await response.text();
+          errorMessage = errorText.slice(0, 200) || errorMessage;
+        } catch {
+          // ignore
+        }
+      }
+      throw new Error(`生成失败: ${errorMessage}`);
+    }
+
+    let data;
+    try {
+      data = await response.json();
+    } catch {
+      throw new Error("API 返回了无效的 JSON 响应，可能是代理服务器超时或返回了错误页面");
+    }
     console.log("Doubao API response:", data);
 
     // Extract images from OpenAI-compatible response
@@ -220,8 +257,8 @@ function App() {
       aspectRatio: aspectRatio,
     };
 
-    // Add imageSize for Pro model (Flash uses fixed 1024px)
-    if (model === "gemini-3-pro-image-preview") {
+    // Add imageSize for Pro / Flash 3.1 models (Flash 2.5 uses fixed 1024px)
+    if (model === "gemini-3-pro-image-preview" || model === "gemini-3.1-flash-image-preview") {
       imageConfig.imageSize = resolutionMap[resolution];
     }
 
@@ -238,8 +275,8 @@ function App() {
       },
     };
 
-    // Add Google Search grounding if enabled (only for Pro model)
-    if (enableSearch && model === "gemini-3-pro-image-preview") {
+    // Add Google Search grounding if enabled (Pro & Flash 3.1)
+    if (enableSearch && (model === "gemini-3-pro-image-preview" || model === "gemini-3.1-flash-image-preview")) {
       requestBody.tools = [
         {
           googleSearch: {},
@@ -274,20 +311,58 @@ function App() {
       apiUrl = `${baseUrl}/v1beta/models/${model}:generateContent?key=${apiKey}`;
     }
 
-    const response = await fetch(apiUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(requestBody),
-    });
+    // Set up timeout with AbortController (Pro model needs longer, up to 180s)
+    const timeoutMs = model === "gemini-3-pro-image-preview" ? 180000 : 120000;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.error?.message || "生成失败");
+    let response;
+    try {
+      response = await fetch(apiUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(requestBody),
+        signal: controller.signal,
+      });
+    } catch (err) {
+      clearTimeout(timeoutId);
+      if (err.name === "AbortError") {
+        throw new Error(
+          `请求超时（${timeoutMs / 1000}秒），Pro 模型图片生成可能需要较长时间，请稍后重试`
+        );
+      }
+      throw err;
+    } finally {
+      clearTimeout(timeoutId);
     }
 
-    const data = await response.json();
+    if (!response.ok) {
+      let errorMessage = `HTTP ${response.status}`;
+      try {
+        const errorData = await response.json();
+        errorMessage = errorData.error?.message || JSON.stringify(errorData);
+      } catch {
+        // If response is not JSON, try reading as text
+        try {
+          const errorText = await response.text();
+          errorMessage = errorText.slice(0, 200) || errorMessage;
+        } catch {
+          // ignore
+        }
+      }
+      throw new Error(`生成失败: ${errorMessage}`);
+    }
+
+    let data;
+    try {
+      data = await response.json();
+    } catch {
+      throw new Error("API 返回了无效的 JSON 响应，可能是代理服务器超时或返回了错误页面");
+    }
+
+    console.log("Gemini API response:", data);
 
     // Extract image from response
     if (data.candidates && data.candidates[0]?.content?.parts) {
@@ -305,10 +380,41 @@ function App() {
         }));
         setGeneratedImages([...newImages, ...generatedImages]);
       } else {
-        throw new Error("响应中没有找到图片数据");
+        // Response has candidates but no image parts - might be text-only or safety filtered
+        const textParts = data.candidates[0].content.parts
+          .filter((part) => part.text)
+          .map((part) => part.text)
+          .join("");
+        const finishReason = data.candidates[0].finishReason;
+        if (finishReason === "SAFETY") {
+          throw new Error("图片因安全策略被过滤，请修改提示词后重试");
+        }
+        throw new Error(
+          `响应中没有找到图片数据${textParts ? `（模型返回了文本: ${textParts.slice(0, 100)}）` : ""}${finishReason ? `，结束原因: ${finishReason}` : ""}`
+        );
       }
     } else {
-      throw new Error("API 响应格式不正确");
+      // Log the actual response for debugging
+      console.error("Unexpected API response format:", data);
+      // Provide more helpful error messages based on response content
+      if (data.error) {
+        throw new Error(`API 错误: ${data.error.message || JSON.stringify(data.error)}`);
+      }
+      if (data.candidates && data.candidates[0]?.finishReason) {
+        const reason = data.candidates[0].finishReason;
+        if (reason === "SAFETY") {
+          throw new Error("图片因安全策略被过滤，请修改提示词后重试");
+        }
+        throw new Error(`生成被终止，原因: ${reason}`);
+      }
+      if (data.promptFeedback?.blockReason) {
+        throw new Error(`提示词被拦截，原因: ${data.promptFeedback.blockReason}`);
+      }
+      // Fallback: show truncated response for debugging
+      const responsePreview = JSON.stringify(data).slice(0, 300);
+      throw new Error(
+        `API 响应格式不正确，请检查模型名称和 Endpoint 是否匹配。响应预览: ${responsePreview}`
+      );
     }
   };
 
@@ -468,6 +574,9 @@ function App() {
                 <option value="gemini-3-pro-image-preview">
                   Gemini 3 Pro Image Preview (高质量，最多14张参考图)
                 </option>
+                <option value="gemini-3.1-flash-image-preview">
+                  Gemini 3.1 Flash Image Preview (快速高质，最多1张参考图)
+                </option>
                 <option value="gemini-2.5-flash-image">
                   Gemini 2.5 Flash Image (快速，最多1张参考图)
                 </option>
@@ -476,7 +585,9 @@ function App() {
                 </option>
               </select>
               <p className="text-xs text-slate-500 mt-1">
-                {model === "gemini-2.5-flash-image"
+                {model === "gemini-3.1-flash-image-preview"
+                  ? "Google 最新 Flash 绘画模型，支持 1K/2K/4K 分辨率，1 张参考图"
+                  : model === "gemini-2.5-flash-image"
                   ? "快速生成，固定 1024px 分辨率，支持 1 张参考图"
                   : model === "doubao-seedream-4-5-251128"
                   ? "字节跳动豆包图像生成模型，需要使用阿 Q API Endpoint"
@@ -484,8 +595,8 @@ function App() {
               </p>
             </div>
 
-            {/* Google Search Toggle - Only for Pro model */}
-            {model === "gemini-3-pro-image-preview" && (
+            {/* Google Search Toggle - Pro & Flash 3.1 */}
+            {(model === "gemini-3-pro-image-preview" || model === "gemini-3.1-flash-image-preview") && (
               <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-200">
                 <div className="flex-1">
                   <label className="block text-sm font-medium text-slate-700">
@@ -566,7 +677,7 @@ function App() {
                 分辨率
                 {model === "gemini-2.5-flash-image" && (
                   <span className="ml-2 text-xs text-slate-500">
-                    (Flash 模型固定 1024px)
+                    (Flash 2.5 固定 1024px)
                   </span>
                 )}
                 {isDoubaoModel && (
