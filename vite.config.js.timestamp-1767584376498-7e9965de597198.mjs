@@ -1,0 +1,26 @@
+// vite.config.js
+import { defineConfig } from "file:///Users/yiqianqian/Library/Mobile%20Documents/com%7Eapple%7ECloudDocs/Development/nanogen_studio/node_modules/vite/dist/node/index.js";
+import react from "file:///Users/yiqianqian/Library/Mobile%20Documents/com%7Eapple%7ECloudDocs/Development/nanogen_studio/node_modules/@vitejs/plugin-react/dist/index.js";
+var vite_config_default = defineConfig({
+  plugins: [react()],
+  server: {
+    port: 3008,
+    host: "localhost",
+    // 使用 localhost 避免网络接口检测问题
+    strictPort: false
+  },
+  preview: {
+    port: 3008,
+    host: "0.0.0.0",
+    // 允许外部访问
+    allowedHosts: [
+      "banana.cpolar.cn",
+      ".cpolar.cn"
+      // 允许所有 cpolar.cn 子域名
+    ]
+  }
+});
+export {
+  vite_config_default as default
+};
+//# sourceMappingURL=data:application/json;base64,ewogICJ2ZXJzaW9uIjogMywKICAic291cmNlcyI6IFsidml0ZS5jb25maWcuanMiXSwKICAic291cmNlc0NvbnRlbnQiOiBbImNvbnN0IF9fdml0ZV9pbmplY3RlZF9vcmlnaW5hbF9kaXJuYW1lID0gXCIvVXNlcnMveWlxaWFucWlhbi9MaWJyYXJ5L01vYmlsZSBEb2N1bWVudHMvY29tfmFwcGxlfkNsb3VkRG9jcy9EZXZlbG9wbWVudC9uYW5vZ2VuX3N0dWRpb1wiO2NvbnN0IF9fdml0ZV9pbmplY3RlZF9vcmlnaW5hbF9maWxlbmFtZSA9IFwiL1VzZXJzL3lpcWlhbnFpYW4vTGlicmFyeS9Nb2JpbGUgRG9jdW1lbnRzL2NvbX5hcHBsZX5DbG91ZERvY3MvRGV2ZWxvcG1lbnQvbmFub2dlbl9zdHVkaW8vdml0ZS5jb25maWcuanNcIjtjb25zdCBfX3ZpdGVfaW5qZWN0ZWRfb3JpZ2luYWxfaW1wb3J0X21ldGFfdXJsID0gXCJmaWxlOi8vL1VzZXJzL3lpcWlhbnFpYW4vTGlicmFyeS9Nb2JpbGUlMjBEb2N1bWVudHMvY29tJTdFYXBwbGUlN0VDbG91ZERvY3MvRGV2ZWxvcG1lbnQvbmFub2dlbl9zdHVkaW8vdml0ZS5jb25maWcuanNcIjtpbXBvcnQgeyBkZWZpbmVDb25maWcgfSBmcm9tIFwidml0ZVwiO1xuaW1wb3J0IHJlYWN0IGZyb20gXCJAdml0ZWpzL3BsdWdpbi1yZWFjdFwiO1xuXG5leHBvcnQgZGVmYXVsdCBkZWZpbmVDb25maWcoe1xuICBwbHVnaW5zOiBbcmVhY3QoKV0sXG4gIHNlcnZlcjoge1xuICAgIHBvcnQ6IDMwMDgsXG4gICAgaG9zdDogXCJsb2NhbGhvc3RcIiwgLy8gXHU0RjdGXHU3NTI4IGxvY2FsaG9zdCBcdTkwN0ZcdTUxNERcdTdGNTFcdTdFRENcdTYzQTVcdTUzRTNcdTY4QzBcdTZENEJcdTk1RUVcdTk4OThcbiAgICBzdHJpY3RQb3J0OiBmYWxzZSxcbiAgfSxcbiAgcHJldmlldzoge1xuICAgIHBvcnQ6IDMwMDgsXG4gICAgaG9zdDogXCIwLjAuMC4wXCIsIC8vIFx1NTE0MVx1OEJCOFx1NTkxNlx1OTBFOFx1OEJCRlx1OTVFRVxuICAgIGFsbG93ZWRIb3N0czogW1xuICAgICAgXCJiYW5hbmEuY3BvbGFyLmNuXCIsXG4gICAgICBcIi5jcG9sYXIuY25cIiwgLy8gXHU1MTQxXHU4QkI4XHU2MjQwXHU2NzA5IGNwb2xhci5jbiBcdTVCNTBcdTU3REZcdTU0MERcbiAgICBdLFxuICB9LFxufSk7XG4iXSwKICAibWFwcGluZ3MiOiAiO0FBQW1jLFNBQVMsb0JBQW9CO0FBQ2hlLE9BQU8sV0FBVztBQUVsQixJQUFPLHNCQUFRLGFBQWE7QUFBQSxFQUMxQixTQUFTLENBQUMsTUFBTSxDQUFDO0FBQUEsRUFDakIsUUFBUTtBQUFBLElBQ04sTUFBTTtBQUFBLElBQ04sTUFBTTtBQUFBO0FBQUEsSUFDTixZQUFZO0FBQUEsRUFDZDtBQUFBLEVBQ0EsU0FBUztBQUFBLElBQ1AsTUFBTTtBQUFBLElBQ04sTUFBTTtBQUFBO0FBQUEsSUFDTixjQUFjO0FBQUEsTUFDWjtBQUFBLE1BQ0E7QUFBQTtBQUFBLElBQ0Y7QUFBQSxFQUNGO0FBQ0YsQ0FBQzsiLAogICJuYW1lcyI6IFtdCn0K
