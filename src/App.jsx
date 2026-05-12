@@ -26,6 +26,7 @@ function App() {
   const [referenceImagePreviews, setReferenceImagePreviews] = useState([]);
   const [enableSearch, setEnableSearch] = useState(false);
   const [enableMultiImage, setEnableMultiImage] = useState(false); // 豆包组图功能
+  const [gptQuality, setGptQuality] = useState("auto"); // GPT Image 2 质量
 
   // State for generation
   const [isGenerating, setIsGenerating] = useState(false);
@@ -45,6 +46,8 @@ function App() {
           ? "Flash 3.1"
           : model === "doubao-seedream-4-5-251128"
           ? "豆包 4.5"
+          : model === "gpt-image-2"
+          ? "GPT Image 2"
           : "Pro";
       setError(`切换到 ${modelName} 模型，参考图片已限制为 ${maxImages} 张`);
       setTimeout(() => setError(null), 3000);
@@ -55,15 +58,17 @@ function App() {
     }
   }, [model]);
 
-  // Check if model is doubao
+  // Check model type
   const isDoubaoModel = model === "doubao-seedream-4-5-251128";
   const isGeminiModel = model.startsWith("gemini-");
+  const isGptImageModel = model === "gpt-image-2";
 
   // Get max images allowed based on model
   const getMaxImages = () => {
     if (model === "gemini-3-pro-image-preview") return 14;
     if (model === "gemini-3.1-flash-image-preview") return 1;
     if (isDoubaoModel) return 5;
+    if (isGptImageModel) return 16; // GPT Image 2 edits 端点最多支持 16 张参考图
     return 1;
   };
 
@@ -134,9 +139,11 @@ function App() {
     setError(null);
 
     try {
-      // Handle Doubao model with OpenAI-compatible API
+      // Handle different model APIs
       if (isDoubaoModel) {
         await handleDoubaoGenerate();
+      } else if (isGptImageModel) {
+        await handleGptImageGenerate();
       } else {
         await handleGeminiGenerate();
       }
@@ -233,6 +240,125 @@ function App() {
         // Handle both url and b64_json formats (image is jpeg format)
         data: item.b64_json
           ? `data:image/jpeg;base64,${item.b64_json}`
+          : item.url,
+        prompt: prompt,
+        timestamp: new Date().toLocaleString("zh-CN"),
+      }));
+      setGeneratedImages([...newImages, ...generatedImages]);
+    } else {
+      throw new Error("响应中没有找到图片数据");
+    }
+  };
+
+  // Handle GPT Image 2 generation (OpenAI Images API)
+  const handleGptImageGenerate = async () => {
+    const baseUrl = endpoint.trim()
+      ? endpoint.trim().replace(/\/+$/, "")
+      : "https://api.openai.com";
+
+    const hasRefImages = referenceImages.length > 0;
+    // 有参考图片时用 edits 端点（图生图），否则用 generations 端点（文生图）
+    const apiUrl = hasRefImages
+      ? `${baseUrl}/v1/images/edits`
+      : `${baseUrl}/v1/images/generations`;
+
+    // Map aspect ratio + resolution to pixel dimensions
+    // 约束：16 的倍数，单边 ≤ 3840px，总像素 655,360 ~ 8,294,400
+    const sizeMap = {
+      "1:1":  { "1K": "1024x1024", "2K": "2048x2048", "4K": "2880x2880" },
+      "16:9": { "1K": "1536x864",  "2K": "2560x1440", "4K": "3840x2160" },
+      "9:16": { "1K": "864x1536",  "2K": "1440x2560", "4K": "2160x3840" },
+      "4:3":  { "1K": "1024x768",  "2K": "2048x1536", "4K": "3072x2304" },
+      "3:4":  { "1K": "768x1024",  "2K": "1536x2048", "4K": "2304x3072" },
+    };
+    const size = sizeMap[aspectRatio]?.[resolution] || "1024x1024";
+
+    let fetchOptions;
+    if (hasRefImages) {
+      // 图生图：使用 multipart/form-data
+      const formData = new FormData();
+      formData.append("model", "gpt-image-2");
+      formData.append("prompt", prompt);
+      formData.append("size", size);
+      formData.append("quality", gptQuality);
+      formData.append("n", "1");
+      for (const image of referenceImages) {
+        formData.append("image[]", image);
+      }
+      fetchOptions = {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: formData,
+      };
+    } else {
+      // 文生图：使用 JSON
+      fetchOptions = {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: "gpt-image-2",
+          prompt: prompt,
+          size: size,
+          quality: gptQuality,
+          n: 1,
+        }),
+      };
+    }
+
+    // Set up timeout (480s for image generation)
+    const timeoutMs = 480000;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    fetchOptions.signal = controller.signal;
+
+    let response;
+    try {
+      response = await fetch(apiUrl, fetchOptions);
+    } catch (err) {
+      clearTimeout(timeoutId);
+      if (err.name === "AbortError") {
+        throw new Error(`请求超时（${timeoutMs / 1000}秒），请稍后重试`);
+      }
+      throw err;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+
+    if (!response.ok) {
+      let errorMessage = `HTTP ${response.status}`;
+      try {
+        const errorData = await response.json();
+        errorMessage = errorData.error?.message || JSON.stringify(errorData);
+      } catch {
+        try {
+          const errorText = await response.text();
+          errorMessage = errorText.slice(0, 200) || errorMessage;
+        } catch {
+          // ignore
+        }
+      }
+      throw new Error(`生成失败: ${errorMessage}`);
+    }
+
+    let data;
+    try {
+      data = await response.json();
+    } catch {
+      throw new Error("API 返回了无效的 JSON 响应");
+    }
+    console.log("GPT Image 2 API response:", data);
+
+    // Extract images from OpenAI response
+    if (data.data && data.data.length > 0) {
+      const newImages = data.data.map((item) => ({
+        id: Date.now() + Math.random(),
+        data: item.b64_json
+          ? `data:image/png;base64,${item.b64_json}`
           : item.url,
         prompt: prompt,
         timestamp: new Date().toLocaleString("zh-CN"),
@@ -519,6 +645,8 @@ function App() {
                 placeholder={
                   isDoubaoModel
                     ? "输入你的阿 Q API Key"
+                    : isGptImageModel
+                    ? "输入你的 OpenAI API Key"
                     : "输入你的 Gemini API Key"
                 }
                 className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent text-sm"
@@ -536,6 +664,8 @@ function App() {
                 placeholder={
                   isDoubaoModel
                     ? "豆包模型必须填写阿 Q API Endpoint"
+                    : isGptImageModel
+                    ? "留空使用 OpenAI 官方 API，或填写兼容 Endpoint"
                     : "例如: https://api.drqyq.com (留空使用 Google 官方 API)"
                 }
                 className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent text-sm ${
@@ -551,6 +681,12 @@ function App() {
                         .trim()
                         .replace(/\/+$/, "")}/v1/images/generations`
                     : "⚠️ 豆包模型需要使用阿 Q API，请填写 Endpoint"
+                  : isGptImageModel
+                  ? endpoint
+                    ? `自定义: ${endpoint
+                        .trim()
+                        .replace(/\/+$/, "")}/v1/images/generations`
+                    : "默认使用 OpenAI 官方 API"
                   : endpoint
                   ? `自定义: ${endpoint
                       .trim()
@@ -583,6 +719,9 @@ function App() {
                 <option value="doubao-seedream-4-5-251128">
                   豆包 4.5 (需要阿 Q API，最多5张参考图)
                 </option>
+                <option value="gpt-image-2">
+                  GPT Image 2 (OpenAI 最新，最多16张参考图)
+                </option>
               </select>
               <p className="text-xs text-slate-500 mt-1">
                 {model === "gemini-3.1-flash-image-preview"
@@ -591,6 +730,8 @@ function App() {
                   ? "快速生成，固定 1024px 分辨率，支持 1 张参考图"
                   : model === "doubao-seedream-4-5-251128"
                   ? "字节跳动豆包图像生成模型，需要使用阿 Q API Endpoint"
+                  : isGptImageModel
+                  ? "OpenAI 最新图像模型，支持最多 16 张参考图（图生图），多种质量等级"
                   : "高质量生成，支持 1K/2K/4K 分辨率，支持最多 14 张参考图"}
               </p>
             </div>
@@ -618,6 +759,38 @@ function App() {
                     }`}
                   />
                 </button>
+              </div>
+            )}
+
+            {/* Quality Selector - Only for GPT Image 2 */}
+            {isGptImageModel && (
+              <div className="p-3 bg-slate-50 rounded-lg border border-slate-200 space-y-2">
+                <label className="block text-sm font-medium text-slate-700">
+                  图像质量
+                </label>
+                <div className="grid grid-cols-4 gap-1.5">
+                  {[
+                    { value: "auto", label: "自动" },
+                    { value: "low", label: "低" },
+                    { value: "medium", label: "中" },
+                    { value: "high", label: "高" },
+                  ].map((q) => (
+                    <button
+                      key={q.value}
+                      onClick={() => setGptQuality(q.value)}
+                      className={`px-2 py-1.5 rounded-md text-xs font-medium transition-all ${
+                        gptQuality === q.value
+                          ? "bg-primary-500 text-white shadow-sm"
+                          : "bg-white text-slate-600 hover:bg-slate-100 border border-slate-200"
+                      }`}
+                    >
+                      {q.label}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-xs text-slate-500">
+                  质量越高生成越慢，auto 由模型自动选择
+                </p>
               </div>
             )}
 
@@ -682,6 +855,11 @@ function App() {
                 )}
                 {isDoubaoModel && (
                   <span className="ml-2 text-xs text-slate-500">(默认 2K)</span>
+                )}
+                {isGptImageModel && (
+                  <span className="ml-2 text-xs text-slate-500">
+                    (支持自定义分辨率)
+                  </span>
                 )}
               </label>
               <div className="grid grid-cols-3 gap-2">
